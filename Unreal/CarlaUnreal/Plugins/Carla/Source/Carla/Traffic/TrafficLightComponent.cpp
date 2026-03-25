@@ -192,6 +192,15 @@ void UTrafficLightComponent::OnBeginOverlapTriggerBox(UPrimitiveComponent *Overl
       Vehicles.Add(VehicleController);
       VehicleController->SetTrafficLight(Cast<ATrafficLightBase>(GetOwner()));
     }
+    else
+    {
+      // Controller not yet available (vehicle spawned inside the trigger
+      // box before set_autopilot was called).  Queue for deferred retry.
+      PendingVehicles.AddUnique(Vehicle);
+      GetWorld()->GetTimerManager().SetTimerForNextTick(
+          FTimerDelegate::CreateUObject(this,
+              &UTrafficLightComponent::RetryPendingVehicles));
+    }
   }
 }
 
@@ -203,6 +212,7 @@ void UTrafficLightComponent::OnEndOverlapTriggerBox(UPrimitiveComponent *Overlap
   ACarlaWheeledVehicle * Vehicle = Cast<ACarlaWheeledVehicle>(OtherActor);
   if (Vehicle)
   {
+    PendingVehicles.Remove(Vehicle);
     AWheeledVehicleAIController* VehicleController =
         Cast<AWheeledVehicleAIController>(Vehicle->GetController());
     if (VehicleController)
@@ -210,6 +220,35 @@ void UTrafficLightComponent::OnEndOverlapTriggerBox(UPrimitiveComponent *Overlap
       VehicleController->SetTrafficLightState(ETrafficLightState::Green);
       VehicleController->SetTrafficLight(nullptr);
       Vehicles.Remove(VehicleController);
+    }
+  }
+}
+
+void UTrafficLightComponent::RetryPendingVehicles()
+{
+  for (int32 i = PendingVehicles.Num() - 1; i >= 0; --i)
+  {
+    ACarlaWheeledVehicle* Vehicle = PendingVehicles[i];
+    if (!IsValid(Vehicle))
+    {
+      PendingVehicles.RemoveAt(i);
+      continue;
+    }
+    AWheeledVehicleAIController* VehicleController =
+        Cast<AWheeledVehicleAIController>(Vehicle->GetController());
+    if (VehicleController)
+    {
+      VehicleController->SetTrafficLightState(LightState);
+      Vehicles.Add(VehicleController);
+      VehicleController->SetTrafficLight(Cast<ATrafficLightBase>(GetOwner()));
+      PendingVehicles.RemoveAt(i);
+    }
+    else
+    {
+      // Still no controller — retry next tick
+      GetWorld()->GetTimerManager().SetTimerForNextTick(
+          FTimerDelegate::CreateUObject(this,
+              &UTrafficLightComponent::RetryPendingVehicles));
     }
   }
 }
